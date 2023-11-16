@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ConcumaRuntime": {
+      "commandName": "Project",
+      "commandLineArgs": "scr/out.occm"
+    }
+  }
+}
