@@ -1,9 +1,13 @@
-﻿namespace ConcumaRuntimeFramework
+﻿using ConcumaVM;
+
+namespace ConcumaRuntimeFramework
 {
     public sealed class VM
     {
         private readonly byte[] _bytes;
         private int _current = 0;
+
+        private readonly Dictionary<int, Symbol> _symbols = new();
 
         public VM(byte[] bytes)
         {
@@ -12,9 +16,82 @@
 
         public void Run()
         {
-            while (!IsEnd())
+            try
             {
-                EvaluateStatement();
+                while (!IsEnd())
+                {
+                    EvaluateStatement();
+                }
+            }
+            catch (RuntimeException e)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine(e.Message);
+                Console.ForegroundColor = ConsoleColor.White;
+            }
+        }
+
+        private void SkipStatement()
+        {
+            switch (Advance())
+            {
+                case 0x01: //Print
+                    {
+                        EvaluateExpression();
+                        break;
+                    }
+                case 0x02: //If
+                    {
+                        EvaluateExpression();
+                        SkipStatement();
+                        if (Peek() == 0x00)
+                        {
+                            Advance();
+                        }
+                        else
+                        {
+                            SkipStatement();
+                        }
+                        break;
+                    }
+                case 0x03: //Block
+                    {
+                        _current += 4;
+                        int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < len; i++)
+                        {
+                            SkipStatement();
+                        }
+                        break;
+                    }
+                case 0x04: // Declaration
+                    {
+                        Advance();
+                        _current += 4;
+                        if (Peek() != 0x00)
+                        {
+                            EvaluateExpression();
+                        }
+                        else
+                        {
+                            Advance();
+                        }
+                        break;
+                    }
+                case 0x05: //Definition
+                    {
+                        _current += 4;
+                        EvaluateExpression();
+                        break;
+                    }
+                case 0x06: //For
+                    {
+                        if (Peek() != 0x00) SkipStatement();
+                        EvaluateExpression();
+                        SkipStatement();
+                        if (Peek() != 0x00) SkipStatement();
+                        break;
+                    }
             }
         }
 
@@ -25,6 +102,92 @@
                 case 0x01: //Print
                     {
                         Console.WriteLine(EvaluateExpression());
+                        break;
+                    }
+                case 0x02: //If
+                    {
+                        bool conditionMet = false;
+                        object? condition = EvaluateExpression();
+                        if (condition is bool b)
+                        {
+                            conditionMet = b;
+                        }
+
+                        if (conditionMet)
+                        {
+                            EvaluateStatement();
+                            SkipStatement();
+                        }
+                        else
+                        {
+                            SkipStatement();
+
+                            if (Peek() == 0x00)
+                            {
+                                break;
+                            }
+
+                            EvaluateStatement();
+                        }
+
+                        break;
+                    }
+                case 0x03: // Block
+                    {
+                        _current += 4;
+                        int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < len; i++)
+                        {
+                            EvaluateStatement();
+                        }
+                        break;
+                    }
+                case 0x04: // Declaration
+                    {
+                        bool isConst = Advance() == 0x01;
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        object? initializer = null;
+                        if (Peek() != 0x00)
+                        {
+                            initializer = EvaluateExpression();
+                        }
+                        _symbols.Add(symbol, new Symbol.Var(isConst, initializer));
+                        break;
+                    }
+                case 0x05: // Definition
+                    {
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        if ((_symbols[symbol] as Symbol.Var)!.Const)
+                        {
+                            throw new RuntimeException("Cannot redefine constant variable.");
+                        }
+                        _symbols[symbol].Value = EvaluateExpression();
+                        break;
+                    }
+                case 0x06: // For Loop
+                    {
+                        if (Peek() != 0x00) EvaluateStatement();
+                        int condition = _current;
+
+                        while (true)
+                        {
+                            _current = condition;
+                            object? c = EvaluateExpression();
+                            if (TypeConverter.Truthy(c))
+                            {
+                                EvaluateStatement();
+                                if (Peek() != 0x00) EvaluateStatement();
+                            }
+                            else
+                            {
+                                SkipStatement();
+                                if (Peek() != 0x00) SkipStatement();
+                                break;
+                            }
+                        }
+
                         break;
                     }
             }
@@ -42,9 +205,18 @@
                     return EvaluateExpression();
                 case 0x04:
                     return Literal();
+                case 0x05:
+                    return Var();
                 default:
                     return Literal();
             }
+        }
+
+        private object? Var()
+        {
+            _current += 4;
+            int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+            return _symbols[symbol].Value;
         }
 
         private object Unary()
@@ -98,208 +270,43 @@
             {
                 case 0x01: // +
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia + ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db + ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic + dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd + dd2;
-                        }
-
-                        if (left is string s && right is string s2)
-                        {
-                            return s + s2;
-                        }
-
-                        break;
+                        return TypeConverter.Add(left, right);
                     }
                 case 0x02: // -
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia - ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db - ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic - dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd - dd2;
-                        }
-
-                        break;
+                        return TypeConverter.Subtract(left, right);
                     }
                 case 0x03: // *
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia * ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db * ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic * dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd * dd2;
-                        }
-
-                        break;
+                        return TypeConverter.Multiply(left, right);
                     }
                 case 0x04: // /
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia / ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db / ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic / dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd / dd2;
-                        }
-
-                        break;
+                        return TypeConverter.Divide(left, right);
                     }
                 case 0x05: // ==
                     {
-                        return left == right;
+                        return TypeConverter.Equals(left, right);
                     }
                 case 0x06: // !=
                     {
-                        return left != right;
+                        return !TypeConverter.Equals(left, right);
                     }
                 case 0x07: // <
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia < ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db < ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic < dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd < dd2;
-                        }
-
-                        break;
+                        return TypeConverter.Less(left, right);
                     }
                 case 0x08: // <=
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia <= ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db <= ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic <= dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd <= dd2;
-                        }
-
-                        break;
+                        return TypeConverter.LessEqual(left, right);
                     }
                 case 0x09: // >
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia > ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db > ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic > dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd > dd2;
-                        }
-
-                        break;
+                        return TypeConverter.Greater(left, right);
                     }
                 case 0x0A: // >=
                     {
-                        if (left is int ia && right is int ia2)
-                        {
-                            return ia >= ia2;
-                        }
-
-                        if (left is double db && right is int ib)
-                        {
-                            return db >= ib;
-                        }
-
-                        if (left is int ic && right is double dc)
-                        {
-                            return ic >= dc;
-                        }
-
-                        if (left is double dd && right is double dd2)
-                        {
-                            return dd >= dd2;
-                        }
-
-                        break;
+                        return TypeConverter.GreaterEqual(left, right);
                     }
             }
 
