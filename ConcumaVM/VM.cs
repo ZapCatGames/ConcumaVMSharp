@@ -7,7 +7,7 @@ namespace ConcumaRuntimeFramework
         private readonly byte[] _bytes;
         private int _current = 0;
 
-        private readonly Dictionary<int, Symbol> _symbols = new();
+        private ConcumaEnvironment _currentEnv = new(null);
 
         public VM(byte[] bytes)
         {
@@ -37,12 +37,12 @@ namespace ConcumaRuntimeFramework
             {
                 case 0x01: //Print
                     {
-                        EvaluateExpression();
+                        SkipExpression();
                         break;
                     }
                 case 0x02: //If
                     {
-                        EvaluateExpression();
+                        SkipExpression();
                         SkipStatement();
                         if (Peek() == 0x00)
                         {
@@ -70,7 +70,7 @@ namespace ConcumaRuntimeFramework
                         _current += 4;
                         if (Peek() != 0x00)
                         {
-                            EvaluateExpression();
+                            SkipExpression();
                         }
                         else
                         {
@@ -81,15 +81,43 @@ namespace ConcumaRuntimeFramework
                 case 0x05: //Definition
                     {
                         _current += 4;
-                        EvaluateExpression();
+                        SkipExpression();
                         break;
                     }
                 case 0x06: //For
                     {
                         if (Peek() != 0x00) SkipStatement();
-                        EvaluateExpression();
+                        else Advance();
+                        SkipExpression();
                         SkipStatement();
                         if (Peek() != 0x00) SkipStatement();
+                        else Advance();
+                        break;
+                    }
+                case 0x07: //Break
+                    break;
+                case 0x08: //Function Definition
+                    {
+                        _current += 8;
+                        int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        _current += len * 4;
+                        SkipStatement();
+                        break;
+                    }
+                case 0x09: //Function Call
+                    {
+                        _current += 8;
+                        int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < len; i++)
+                        {
+                            SkipExpression();
+                        }
+                        break;
+                    }
+                case 0x0A: //Return
+                    {
+                        if (Peek() != 0x00) SkipExpression();
+                        else Advance();
                         break;
                     }
             }
@@ -124,6 +152,7 @@ namespace ConcumaRuntimeFramework
 
                             if (Peek() == 0x00)
                             {
+                                Advance();
                                 break;
                             }
 
@@ -136,10 +165,12 @@ namespace ConcumaRuntimeFramework
                     {
                         _current += 4;
                         int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         for (int i = 0; i < len; i++)
                         {
                             EvaluateStatement();
                         }
+                        _currentEnv = _currentEnv.Exit()!;
                         break;
                     }
                 case 0x04: // Declaration
@@ -152,22 +183,23 @@ namespace ConcumaRuntimeFramework
                         {
                             initializer = EvaluateExpression();
                         }
-                        _symbols.Add(symbol, new Symbol.Var(isConst, initializer));
+                        _currentEnv.Add(symbol, new Symbol.Var(isConst, initializer));
                         break;
                     }
                 case 0x05: // Definition
                     {
                         _current += 4;
                         int symbol = BitConverter.ToInt32(_bytes, _current - 4);
-                        if ((_symbols[symbol] as Symbol.Var)!.Const)
+                        if ((_currentEnv.Find(symbol) as Symbol.Var)!.Const)
                         {
                             throw new RuntimeException("Cannot redefine constant variable.");
                         }
-                        _symbols[symbol].Value = EvaluateExpression();
+                        _currentEnv.Find(symbol).Value = EvaluateExpression();
                         break;
                     }
                 case 0x06: // For Loop
                     {
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         if (Peek() != 0x00) EvaluateStatement();
                         int condition = _current;
 
@@ -177,7 +209,16 @@ namespace ConcumaRuntimeFramework
                             object? c = EvaluateExpression();
                             if (TypeConverter.Truthy(c))
                             {
-                                EvaluateStatement();
+                                try
+                                {
+                                    EvaluateStatement();
+                                }
+                                catch (BreakException)
+                                {
+                                    EvaluateStatement();
+                                    break;
+                                }
+
                                 if (Peek() != 0x00) EvaluateStatement();
                             }
                             else
@@ -188,8 +229,110 @@ namespace ConcumaRuntimeFramework
                             }
                         }
 
+                        _currentEnv = _currentEnv.Exit()!;
+
                         break;
                     }
+                case 0x07: //Break
+                    {
+                        throw new BreakException();
+                    }
+                case 0x08: //Function Declaration
+                    {
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _current += 4;
+                        int paramLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        int[] parameters = new int[paramLen];
+                        for (int i = 0; i < paramLen; i++)
+                        {
+                            _current += 4;
+                            int pSymbol = BitConverter.ToInt32(_bytes, _current - 4);
+                            parameters[i] = pSymbol;
+                            _currentEnv.Add(pSymbol, new Symbol.Var(false, null));
+                        }
+                        ConcumaEnvironment env = _currentEnv;
+                        _currentEnv = _currentEnv.Exit()!;
+                        _currentEnv.Add(symbol, new Symbol.Function(paramLen, parameters, _current, env));
+                        SkipStatement();
+                        break;
+                    }
+                case 0x09: //Function call
+                    {
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _current += 4;
+                        int paramLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        object?[] parameters = new object?[paramLen];
+                        for (int i = 0; i < paramLen; i++)
+                        {
+                            parameters[i] = EvaluateExpression();
+                        }
+                        Symbol.Function funSym = (_currentEnv.Find(symbol) as Symbol.Function)!;
+                        ConcumaEnvironment prevEnv = _currentEnv;
+                        _currentEnv = funSym.Environment;
+                        ConcumaFunction func = new(funSym.Parameters, funSym.Action);
+                        int currentLine = _current;
+                        _current = func.Call(parameters, _currentEnv);
+                        try
+                        {
+                            EvaluateStatement();
+                        }
+                        catch (ReturnException)
+                        {
+                            _current = currentLine;
+                            _currentEnv = prevEnv;
+                            break;
+                        }
+                        _current = currentLine;
+                        _currentEnv = prevEnv;
+                        break;
+                    }
+                case 0x0A: //Return
+                    {
+                        object? value = null;
+                        if (Peek() != 0x00) value = EvaluateExpression();
+                        throw new ReturnException(value);
+                    }
+            }
+        }
+
+        private void SkipExpression()
+        {
+            switch (Advance())
+            {
+                case 0x01: // Unary
+                    Advance();
+                    SkipExpression();
+                    break;
+                case 0x02: // Binary
+                    Advance();
+                    SkipExpression();
+                    SkipExpression();
+                    break;
+                case 0x03: // Group
+                    SkipExpression();
+                    break;
+                case 0x04: // Literal
+                    Literal();
+                    break;
+                case 0x05: // Var
+                    _current += 4;
+                    break;
+                case 0x06: // Call
+                    {
+                        _current += 8;
+                        int len = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < len; i++)
+                        {
+                            SkipExpression();
+                        }
+                        break;
+                    }
+                default:
+                    Literal();
+                    break;
             }
         }
 
@@ -199,24 +342,58 @@ namespace ConcumaRuntimeFramework
             {
                 case 0x01: // Unary
                     return Unary();
-                case 0x02:
+                case 0x02: // Binary
                     return Binary();
-                case 0x03:
+                case 0x03: // Group
                     return EvaluateExpression();
-                case 0x04:
+                case 0x04: // Literal
                     return Literal();
-                case 0x05:
+                case 0x05: // Var
                     return Var();
+                case 0x06: // Call
+                    return Call();
                 default:
                     return Literal();
             }
+        }
+
+        private object? Call()
+        {
+            _current += 4;
+            int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+            _current += 4;
+            int paramLen = BitConverter.ToInt32(_bytes, _current - 4);
+            object?[] parameters = new object?[paramLen];
+            for (int i = 0; i < paramLen; i++)
+            {
+                parameters[i] = EvaluateExpression();
+            }
+            Symbol.Function funSym = (_currentEnv.Find(symbol) as Symbol.Function)!;
+            ConcumaEnvironment prevEnv = _currentEnv;
+            _currentEnv = funSym.Environment;
+            ConcumaFunction func = new(funSym.Parameters, funSym.Action);
+            int currentLine = _current;
+            _current = func.Call(parameters, _currentEnv);
+            try
+            {
+                EvaluateStatement();
+            }
+            catch (ReturnException r)
+            {
+                _current = currentLine;
+                _currentEnv = prevEnv;
+                return r.Value;
+            }
+            _current = currentLine;
+            _currentEnv = prevEnv;
+            return null;
         }
 
         private object? Var()
         {
             _current += 4;
             int symbol = BitConverter.ToInt32(_bytes, _current - 4);
-            return _symbols[symbol].Value;
+            return _currentEnv.Find(symbol).Value;
         }
 
         private object Unary()

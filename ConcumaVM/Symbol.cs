@@ -18,5 +18,21 @@
 
             public bool Const { get; }
         }
+
+        public sealed class Function : Symbol
+        {
+            public Function(int paramLen, int[] parameters, int action, ConcumaEnvironment env) : base(null)
+            {
+                ParameterLength = paramLen;
+                Parameters = parameters;
+                Action = action;
+                Environment = env;
+            }
+
+            public int ParameterLength { get; }
+            public int[] Parameters { get; }
+            public int Action { get; }
+            public ConcumaEnvironment Environment { get; }
+        }
     }
 }
