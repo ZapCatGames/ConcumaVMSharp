@@ -1,4 +1,4 @@
-﻿namespace ConcumaRuntimeFramework
+﻿namespace ConcumaVM
 {
     public class ReturnException : Exception
     {

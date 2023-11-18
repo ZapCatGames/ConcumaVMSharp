@@ -17,7 +17,7 @@
 
             for (int i = 0; i < _parameters.Length; i++)
             {
-                env.Find(_parameters[i]).Value = parameters[i];
+                env.Assign(_parameters[i], parameters[i] is Symbol s ? s : new Symbol.Var(false, parameters[i]));
             }
 
             return _action;

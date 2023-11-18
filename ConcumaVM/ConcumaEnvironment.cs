@@ -22,6 +22,7 @@
 
             return _parent.Find(addr);
         }
+        public void Assign(int addr, Symbol symbol) => _symbols[addr] = symbol;
         public ConcumaEnvironment? Exit() => _parent;
     }
 }
