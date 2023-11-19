@@ -15,6 +15,7 @@ namespace ConcumaVM
         public VM(byte[] bytes)
         {
             _bytes = bytes;
+            Blackboard.Clear();
         }
 
         public void Run()
@@ -175,6 +176,23 @@ namespace ConcumaVM
                         {
                             SkipStatement();
                         }
+                        break;
+                    }
+                case 0x0D: //Import
+                    {
+                        _current += 4;
+                        if (Peek() != 0x00) _current += 4;
+                        else Advance();
+                        break;
+                    }
+                case 0x0E: //Binary
+                    {
+                        _current += 4;
+                        for (int i = 0; i < 2; i++)
+                        {
+                            _current += 4;
+                        }
+                        SkipStatement();
                         break;
                     }
             }
@@ -398,6 +416,25 @@ namespace ConcumaVM
                         _currentEnv.Add(aliasSymbol, new Symbol.ExtFunction(aliasSymbol, del));
                         break;
                     }
+                case 0x0E: //Binary
+                    {
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
+                        int[] parameters = new int[2];
+                        for (int i = 0; i < 2; i++)
+                        {
+                            _current += 4;
+                            int pSymbol = BitConverter.ToInt32(_bytes, _current - 4);
+                            parameters[i] = pSymbol;
+                            _currentEnv.Add(pSymbol, new Symbol.Var(false, null));
+                        }
+                        ConcumaEnvironment env = _currentEnv;
+                        _currentEnv = _currentEnv.Exit()!;
+                        _currentEnv.Add(symbol, new Symbol.Binary(symbol, parameters, _current, env));
+                        SkipStatement();
+                        break;
+                    }
             }
         }
 
@@ -410,7 +447,15 @@ namespace ConcumaVM
                     SkipExpression();
                     break;
                 case 0x02: // Binary
-                    Advance();
+                    byte b = Advance();
+                    if (b == 0x00)
+                    {
+                        Advance();
+                    }
+                    else if (b == 0x01)
+                    {
+                        _current += 4;
+                    }
                     SkipExpression();
                     SkipExpression();
                     break;
@@ -433,9 +478,14 @@ namespace ConcumaVM
                         }
                         break;
                     }
+                case 0x07: // Accessor
+                    {
+                        SkipExpression();
+                        SkipExpression();
+                        break;
+                    }
                 default:
-                    Literal();
-                    break;
+                    throw new RuntimeException("Unknown expression type.");
             }
         }
 
@@ -455,7 +505,7 @@ namespace ConcumaVM
                     return Var();
                 case 0x06: // Call
                     return Call();
-                case 0x07:
+                case 0x07: // Accessor
                     return Accessor();
                 default:
                     throw new RuntimeException("Unknown expression type.");
@@ -567,65 +617,95 @@ namespace ConcumaVM
 
         private object? Binary()
         {
-            byte op = Advance();
+            byte opType = Advance();
+            object? op = null;
+            if (opType == 0x00) op = Advance();
+            else if (opType == 0x01) op = EvaluateExpression();
             object? left = EvaluateExpression();
             object? right = EvaluateExpression();
 
-            switch (op)
+            if (opType == 0x00)
             {
-                case 0x01: // +
-                    {
-                        return TypeConverter.Add(left, right);
-                    }
-                case 0x02: // -
-                    {
-                        return TypeConverter.Subtract(left, right);
-                    }
-                case 0x03: // *
-                    {
-                        return TypeConverter.Multiply(left, right);
-                    }
-                case 0x04: // /
-                    {
-                        return TypeConverter.Divide(left, right);
-                    }
-                case 0x05: // ==
-                    {
-                        return TypeConverter.Equals(left, right);
-                    }
-                case 0x06: // !=
-                    {
-                        return !TypeConverter.Equals(left, right);
-                    }
-                case 0x07: // <
-                    {
-                        return TypeConverter.Less(left, right);
-                    }
-                case 0x08: // <=
-                    {
-                        return TypeConverter.LessEqual(left, right);
-                    }
-                case 0x09: // >
-                    {
-                        return TypeConverter.Greater(left, right);
-                    }
-                case 0x0A: // >=
-                    {
-                        return TypeConverter.GreaterEqual(left, right);
-                    }
-                case 0x0B: // .
-                    {
-                        if (left is not Symbol ls) throw new RuntimeException("Expected symbol on left hand of accessor.");
-                        if (ls.Value is Symbol.Env)
+                switch ((byte)op!)
+                {
+                    case 0x01: // +
                         {
-                            if (right is not Symbol rs) throw new RuntimeException("Expected symbol on right hand of accessor.");
-                            return rs.Value;
+                            return TypeConverter.Add(left, right);
                         }
-                        throw new RuntimeException("Cannot apply accessor.");
+                    case 0x02: // -
+                        {
+                            return TypeConverter.Subtract(left, right);
+                        }
+                    case 0x03: // *
+                        {
+                            return TypeConverter.Multiply(left, right);
+                        }
+                    case 0x04: // /
+                        {
+                            return TypeConverter.Divide(left, right);
+                        }
+                    case 0x05: // ==
+                        {
+                            return TypeConverter.Equals(left, right);
+                        }
+                    case 0x06: // !=
+                        {
+                            return !TypeConverter.Equals(left, right);
+                        }
+                    case 0x07: // <
+                        {
+                            return TypeConverter.Less(left, right);
+                        }
+                    case 0x08: // <=
+                        {
+                            return TypeConverter.LessEqual(left, right);
+                        }
+                    case 0x09: // >
+                        {
+                            return TypeConverter.Greater(left, right);
+                        }
+                    case 0x0A: // >=
+                        {
+                            return TypeConverter.GreaterEqual(left, right);
+                        }
+                    case 0x0B: // .
+                        {
+                            if (left is not Symbol ls) throw new RuntimeException("Expected symbol on left hand of accessor.");
+                            if (ls.Value is Symbol.Env)
+                            {
+                                if (right is not Symbol rs) throw new RuntimeException("Expected symbol on right hand of accessor.");
+                                return rs.Value;
+                            }
+                            throw new RuntimeException("Cannot apply accessor.");
+                        }
+                }
+            }
+            else if (opType == 0x01)
+            {
+                if (op is Symbol.Binary b)
+                {
+                    ConcumaEnvironment prevEnv = _currentEnv;
+                    _currentEnv = b.Environment;
+                    ConcumaFunction func = new(b.Parameters, b.Action);
+                    int currentLine = _current;
+                    _current = func.Call(new object?[] {left, right}, _currentEnv);
+                    try
+                    {
+                        EvaluateStatement();
                     }
+                    catch (ReturnException r)
+                    {
+                        _current = currentLine;
+                        _currentEnv = prevEnv;
+                        return r.Value;
+                    }
+                    _current = currentLine;
+                    _currentEnv = prevEnv;
+                    return null;
+                }
             }
 
-            throw new Exception();
+            throw new RuntimeException("Unknown binary op type.");
         }
 
         private object? Literal()

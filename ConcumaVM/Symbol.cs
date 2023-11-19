@@ -91,5 +91,25 @@
                 return $"<{VM.SymbolNameTable[(int)Value!]}>";
             }
         }
+
+        public sealed class Binary : Symbol
+        {
+            public Binary(int symbol, int[] parameters, int action, ConcumaEnvironment env)
+            {
+                Value = symbol;
+                Parameters = parameters;
+                Action = action;
+                Environment = env;
+            }
+
+            public int[] Parameters { get; }
+            public int Action { get; }
+            public ConcumaEnvironment Environment { get; }
+
+            public override string ToString()
+            {
+                return $"<{VM.SymbolNameTable[(int)Value!]}>";
+            }
+        }
     }
 }

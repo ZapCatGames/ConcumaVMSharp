@@ -6,6 +6,11 @@
         {
             private static readonly Dictionary<string, Delegate> _concumaValues = new();
 
+            public static void Clear()
+            {
+                _concumaValues.Clear();
+            }
+
             public static void Add(string name, Delegate value)
             {
                 _concumaValues.Add(name, value);
