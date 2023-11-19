@@ -11,6 +11,7 @@
         }
 
         public void Add(int addr, Symbol symbol) => _symbols.Add(addr, symbol);
+
         public Symbol Find(int addr)
         {
             if (_symbols.ContainsKey(addr))
@@ -22,7 +23,9 @@
 
             return _parent.Find(addr);
         }
+
         public void Assign(int addr, Symbol symbol) => _symbols[addr] = symbol;
+
         public ConcumaEnvironment? Exit() => _parent;
     }
 }

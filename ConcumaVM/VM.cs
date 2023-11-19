@@ -11,10 +11,12 @@ namespace ConcumaVM
         private int _stLoc = 0;
 
         private ConcumaEnvironment _currentEnv = new(null);
+        private SymbolCollector _symbolCollector;
 
         public VM(byte[] bytes)
         {
             _bytes = bytes;
+            _symbolCollector = new(bytes);
             Blackboard.Clear();
         }
 
@@ -122,6 +124,7 @@ namespace ConcumaVM
                     }
                 case 0x07: //Break
                     break;
+
                 case 0x08: //Function Declaration
                     {
                         _current += 8;
@@ -446,6 +449,7 @@ namespace ConcumaVM
                     Advance();
                     SkipExpression();
                     break;
+
                 case 0x02: // Binary
                     byte b = Advance();
                     if (b == 0x00)
@@ -459,15 +463,19 @@ namespace ConcumaVM
                     SkipExpression();
                     SkipExpression();
                     break;
+
                 case 0x03: // Group
                     SkipExpression();
                     break;
+
                 case 0x04: // Literal
                     Literal();
                     break;
+
                 case 0x05: // Var
                     _current += 4;
                     break;
+
                 case 0x06: // Call
                     {
                         _current += 8;
@@ -495,18 +503,25 @@ namespace ConcumaVM
             {
                 case 0x01: // Unary
                     return Unary();
+
                 case 0x02: // Binary
                     return Binary();
+
                 case 0x03: // Group
                     return EvaluateExpression();
+
                 case 0x04: // Literal
                     return Literal();
+
                 case 0x05: // Var
                     return Var();
+
                 case 0x06: // Call
                     return Call();
+
                 case 0x07: // Accessor
                     return Accessor();
+
                 default:
                     throw new RuntimeException("Unknown expression type.");
             }
@@ -688,7 +703,7 @@ namespace ConcumaVM
                     _currentEnv = b.Environment;
                     ConcumaFunction func = new(b.Parameters, b.Action);
                     int currentLine = _current;
-                    _current = func.Call(new object?[] {left, right}, _currentEnv);
+                    _current = func.Call(new object?[] { left, right }, _currentEnv);
                     try
                     {
                         EvaluateStatement();
@@ -716,14 +731,18 @@ namespace ConcumaVM
             {
                 case 0x00: //Null
                     return null;
+
                 case 0x01: //Bool
                     return Advance() == 0x01;
+
                 case 0x02: //Int
                     _current += 4;
                     return BitConverter.ToInt32(_bytes, _current - 4);
+
                 case 0x03: //Double
                     _current += 8;
                     return BitConverter.ToDouble(_bytes, _current - 8);
+
                 case 0x04: //String
                     _current += 4;
                     int length = BitConverter.ToInt32(_bytes, _current - 4);
@@ -739,9 +758,11 @@ namespace ConcumaVM
         }
 
         private bool IsStatementEnd() => _current >= _stLoc;
+
         private bool IsEnd() => _current >= _bytes.Length;
 
         private byte Peek() => _bytes[_current];
+
         private byte Advance()
         {
             if (IsEnd()) return 0x00;

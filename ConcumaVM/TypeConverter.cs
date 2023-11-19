@@ -33,7 +33,7 @@
             throw new RuntimeException("Attempting to get truthy value of non-truthable type.");
         }
 
-        public static new bool Equals(object? a, object? b)
+        public new static bool Equals(object? a, object? b)
         {
             a = Cast(a);
             b = Cast(b);
