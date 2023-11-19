@@ -1,8 +1,10 @@
-﻿namespace ConcumaVM
+﻿using System.Reflection;
+
+namespace ConcumaVM
 {
-    public sealed class VM
+    public sealed partial class VM
     {
-        public static Dictionary<int, string> SymbolNameTable = new();
+        public static readonly Dictionary<int, string> SymbolNameTable = new();
 
         private readonly byte[] _bytes;
         private int _current = 0;
@@ -49,7 +51,7 @@
             catch (RuntimeException e)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(e.Message);
+                Console.WriteLine($"RuntimeError: {e.Message}");
                 Console.ForegroundColor = ConsoleColor.White;
             }
         }
@@ -141,6 +143,38 @@
                     {
                         if (Peek() != 0x00) SkipExpression();
                         else Advance();
+                        break;
+                    }
+                case 0x0B: //Class
+                    {
+                        _current += 8;
+                        int varLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < varLen; i++)
+                        {
+                            SkipStatement();
+                        }
+                        _current += 4;
+                        int methodLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < methodLen; i++)
+                        {
+                            SkipStatement();
+                        }
+                        break;
+                    }
+                case 0x0C: //Module
+                    {
+                        _current += 8;
+                        int varLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < varLen; i++)
+                        {
+                            SkipStatement();
+                        }
+                        _current += 4;
+                        int methodLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        for (int i = 0; i < methodLen; i++)
+                        {
+                            SkipStatement();
+                        }
                         break;
                     }
             }
@@ -262,9 +296,9 @@
                     }
                 case 0x08: //Function Declaration
                     {
-                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         _current += 4;
                         int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         _current += 4;
                         int paramLen = BitConverter.ToInt32(_bytes, _current - 4);
                         int[] parameters = new int[paramLen];
@@ -294,9 +328,35 @@
                     }
                 case 0x0B: //Class
                     {
-                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         _current += 4;
                         int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
+                        _current += 4;
+                        int varLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        int[] variables = new int[varLen];
+                        for (int i = 0; i < varLen; i++)
+                        {
+                            variables[i] = _current;
+                            SkipStatement();
+                        }
+                        _current += 4;
+                        int methodLen = BitConverter.ToInt32(_bytes, _current - 4);
+                        int[] methods = new int[methodLen];
+                        for (int i = 0; i < methodLen; i++)
+                        {
+                            methods[i] = _current;
+                            SkipStatement();
+                        }
+                        ConcumaEnvironment env = _currentEnv;
+                        _currentEnv = _currentEnv.Exit()!;
+                        _currentEnv.Add(symbol, new Symbol.Class(symbol, variables, methods, env));
+                        break;
+                    }
+                case 0x0C: //Module
+                    {
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        _currentEnv = new ConcumaEnvironment(_currentEnv);
                         _current += 4;
                         int varLen = BitConverter.ToInt32(_bytes, _current - 4);
                         for (int i = 0; i < varLen; i++)
@@ -311,7 +371,31 @@
                         }
                         ConcumaEnvironment env = _currentEnv;
                         _currentEnv = _currentEnv.Exit()!;
-                        _currentEnv.Add(symbol, new Symbol.Class(symbol, env));
+                        _currentEnv.Add(symbol, new Symbol.Env(symbol, env));
+                        break;
+                    }
+                case 0x0D: //Import
+                    {
+                        _current += 4;
+                        int symbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        int aliasSymbol = symbol;
+                        if (Peek() != 0x00)
+                        {
+                            _current += 4;
+                            aliasSymbol = BitConverter.ToInt32(_bytes, _current - 4);
+                        }
+                        else
+                        {
+                            Advance();
+                        }
+                        string name = SymbolNameTable[symbol];
+                        Delegate? del = Blackboard.Get(name);
+                        if (del is null) throw new RuntimeException("Tried to import non-existent method.");
+                        foreach (ParameterInfo p in del.Method.GetParameters())
+                        {
+                            if (p.ParameterType != typeof(object)) throw new RuntimeException("External method arguments have to be of type <object>.");
+                        }
+                        _currentEnv.Add(aliasSymbol, new Symbol.ExtFunction(aliasSymbol, del));
                         break;
                     }
             }
@@ -371,9 +455,22 @@
                     return Var();
                 case 0x06: // Call
                     return Call();
+                case 0x07:
+                    return Accessor();
                 default:
-                    return Literal();
+                    throw new RuntimeException("Unknown expression type.");
             }
+        }
+
+        private object? Accessor()
+        {
+            object? left = EvaluateExpression();
+            if (left is Symbol.Env env)
+            {
+                _currentEnv = env.Environment;
+            }
+            object? right = EvaluateExpression();
+            return right;
         }
 
         private object? Call()
@@ -391,24 +488,32 @@
                     parameters[i] = v.Value;
                 }
             }
-            Symbol.Function funSym = (_currentEnv.Find(symbol) as Symbol.Function)!;
-            ConcumaEnvironment prevEnv = _currentEnv;
-            _currentEnv = funSym.Environment;
-            ConcumaFunction func = new(funSym.Parameters, funSym.Action);
-            int currentLine = _current;
-            _current = func.Call(parameters, _currentEnv);
-            try
+            Symbol sym = _currentEnv.Find(symbol);
+            if (sym is Symbol.Function funSym)
             {
-                EvaluateStatement();
-            }
-            catch (ReturnException r)
-            {
+                ConcumaEnvironment prevEnv = _currentEnv;
+                _currentEnv = funSym.Environment;
+                ConcumaFunction func = new(funSym.Parameters, funSym.Action);
+                int currentLine = _current;
+                _current = func.Call(parameters, _currentEnv);
+                try
+                {
+                    EvaluateStatement();
+                }
+                catch (ReturnException r)
+                {
+                    _current = currentLine;
+                    _currentEnv = prevEnv;
+                    return r.Value;
+                }
                 _current = currentLine;
                 _currentEnv = prevEnv;
-                return r.Value;
             }
-            _current = currentLine;
-            _currentEnv = prevEnv;
+            else if (sym is Symbol.ExtFunction extSym)
+            {
+                if (parameters.Length != extSym.Action.Method.GetParameters().Length) throw new RuntimeException("Invalid number of parameters for external function.");
+                return extSym.Action.DynamicInvoke(parameters);
+            }
             return null;
         }
 
@@ -460,7 +565,7 @@
             throw new Exception();
         }
 
-        private object Binary()
+        private object? Binary()
         {
             byte op = Advance();
             object? left = EvaluateExpression();
@@ -507,6 +612,16 @@
                 case 0x0A: // >=
                     {
                         return TypeConverter.GreaterEqual(left, right);
+                    }
+                case 0x0B: // .
+                    {
+                        if (left is not Symbol ls) throw new RuntimeException("Expected symbol on left hand of accessor.");
+                        if (ls.Value is Symbol.Env)
+                        {
+                            if (right is not Symbol rs) throw new RuntimeException("Expected symbol on right hand of accessor.");
+                            return rs.Value;
+                        }
+                        throw new RuntimeException("Cannot apply accessor.");
                     }
             }
 

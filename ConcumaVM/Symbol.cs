@@ -42,13 +42,49 @@
 
         public sealed class Class : Symbol
         {
-            public Class(int symbol, ConcumaEnvironment env)
+            public Class(int symbol, int[] variables, int[] methods, ConcumaEnvironment env)
+            {
+                Value = symbol;
+                Variables = variables;
+                Methods = methods;
+                Environment = env;
+            }
+
+            public int[] Variables { get; }
+            public int[] Methods { get; }
+            public ConcumaEnvironment Environment { get; }
+
+            public override string ToString()
+            {
+                return $"<{VM.SymbolNameTable[(int)Value!]}>";
+            }
+        }
+
+        public sealed class Env : Symbol
+        {
+            public Env(int symbol, ConcumaEnvironment env)
             {
                 Value = symbol;
                 Environment = env;
             }
 
             public ConcumaEnvironment Environment { get; }
+
+            public override string ToString()
+            {
+                return $"<{VM.SymbolNameTable[(int)Value!]}>";
+            }
+        }
+
+        public sealed class ExtFunction : Symbol
+        {
+            public ExtFunction(int symbol, Delegate action)
+            {
+                Value = symbol;
+                Action = action;
+            }
+
+            public Delegate Action { get; }
 
             public override string ToString()
             {
